@@ -1,0 +1,514 @@
+setting up dbt
+ - Idea is that you need a .dbt folder in your home directory
+ - for Linux and mac that would be mkdir ~/.dbt
+ - dbt needs this folder to store configurations
+
+- On windows - same but diff command => you reference your home directory in windows this way:
+     mkdir %userprofile%\.dbt
+- The %userprofile% => gets you the home directory
+
+By default in windows - %userprofile% resolves to C:\Users\YourUsername
+- 
+- Install dbt core in terminal - using a pip installation command
+- Start a dbt project with - dbt init <projectname>
+- Follow the prompts. 
+
+
+
+
+Theory:
+ - Common Table Expressions:
+   CTEs  - readable and maintainable code
+   Temporarily named result sets
+   
+   Syntax:
+   WITH <name_of_the_result_set> ([column_names])
+   AS 
+	(
+		<cte_query>
+	)
+<reference_the_CTE>
+
+
+Below is an example of us utilising a CTE to simplify a query - this can become as complex as your imagination
+gets, but essentially instead of having very complex subqueries you could utilise CTEs
+
+WITH raw_listings AS (
+    SELECT *
+    FROM AIRBNB.RAW.RAW_LISTINGS
+)
+
+SELECT 
+    id AS listing_id,
+    name AS listing_name,
+    listing_url,
+    room_type,
+    minimum_nights,
+    host_id,
+    price AS price_str,
+    created_at,
+    updated_at
+FROM raw_listings
+
+
+To execute dbt  - dbt run
+dbt finds your models - creates a view of the data in the dev schema in your warehouse
+
+
+Recap some useful dbt commands;
+ - dbt init <name>
+ - dbt debug - verify that the project is well initialised
+ - dbt run - runs your models against your data warehouse
+ - 
+
+- Very useful extension to install is dbt power user
+
+
+
+Working with dbt models:
+ - SQL definitions
+
+
+Materializations in dbt:
+  - Materialisations are different ways how your models can be stored and managed in the datawarehouse
+  - 
+  - There's 4 builtin materialisations: 
+      - View => 
+        Default materialisation (you want a lightweight representation and you don't reuse data too often)
+	Views are virtual tables in sql and are based on the result of a select query - no data is saved (stored) but it acts as a saved query that you can use as a table. 
+Unlike regular tables, views do not store data - they only store the SQL query used to generate the data
+
+Don't use view materialisations if you read from the same model several times. 
+
+      - Table
+Table materialisation - use it if you read from the model repeatedly. 
+Don't use table materialisation if you're building single-use models
+Models in this materialisation are populated incrementally
+
+
+      - Incremental (table appends)
+Incremental materialisation in dbt allows you to append new data or update existing data instead of rebuilding the entire table from scratch. This is useful for large datasets where recomputing everything is inefficient.
+Key Idea: => Only process new or changed data, rather than recreating the entire table on every dbt run.
+
+
+How Incremental Materialisation is different from table materialisation:
+  -> Data Processing: 
+     Incremental Materialisation- appends or updates only new/changed rows
+     Table Materialisation - Drops and recreates the entire table every run
+  -> Efficiency: 
+     Incremental Materialisation - faster for large datasets
+     Table Materialisation - Slower for large datasets
+  -> Cost:
+     Incremental Materialisation: Lower Compute/Storage cost (processes only new data)
+     Table: Higher cost (recomputes everything)
+  -> Use Case:
+     Incremental: Large datasets with new/updated data (e.g. event logs, transactions)
+     Table: Static d
+
+      - Ephemeral (CTEs)
+Ephemeral materialisation in dbt means the model does not create a physical table or view. Instead, the model is inlined as a Common Table Expression (CTE) within queries that reference it. 
+Key idea: it exists only during query execution and is never stored in the database
+
+Use it - when you merely want an alias to your data
+Don't use it if you read from the same model several times
+
+
+
+DBT:
+Can use Jinja templating to access data from other models. {{ ref("src_listings") }}
+access the model returned by the src_listings code
+
+
+
+To bypass the incremental materialization and rebuild the entire table regardless of its config
+use dbt run --full-refresh
+
+
+SEEDS:
+ - Seeds are smaller datasets that live in the seeds folder of your project
+
+sources - data we interact with that was already loaded into our data warehouse
+
+to upload/work with seeds - have the files in your seed project folder - then run dbt seed
+
+
+SOURCES:
+ - An abstraction on top of your input data
+ - Sources can be defined in any yaml file in models
+   sources defn - sources.yaml
+
+useful to have a yaml file within your models folder where you define your sources - instead of having them called manually in your sql code. Just so that they are all referenced in one location
+
+After defining your sources - to check if your code still works - run dbt compile
+
+
+Source freshness:
+ - source freshness in dbt is a feature that helps track how fresh your data sources are by checking the latest timestamp in a table and comparing it to an expected freshness threshold. This ensures that your upstream data sources are delivering new data as expected and alerts you when data is outdated
+
+Why is source freshness important:
+ - Helps detect stale data before running transformations
+ - Ensures pipelines are working correctly and ingesting new data
+ - Improves data reliability and trustworthiness in analytics
+
+
+Manually check for the source freshness using  - **dbt source freshness**
+
+dbt queries the orders table to find the most recent timestamp - MAX(OF THE LOOKED AT FIELD)
+It then compares that timestamp with the current time.
+If the data is older than 12 hours - issue a warning
+otherwise fail the test
+
+
+
+SNAPSHOTS:
+ - Snapshots in dbt are used to track historical changes in a table over time. they allow you to keep a versioned history of records that might change in your data source. - such as updates to customer details, order statuses or product prices. 
+
+Why snapshots are useful
+ - Track slowly changing dimensions - SCD TYPE 2 => Keep history when records change
+ - Audit changes - see when and how a value was updated
+ - debug data issues - identify incorrect updates in source data
+ - compliance and reporting - maintain historical data for regulatory reasons
+
+How snapshots work in dbt:
+ - When dbt runs a snapshot - it 
+   compares the current version of a record with the previously stored version
+   if there's a change, it keeps the old record and adds the new one with timestamps
+   if there's no change, it does nothing
+
+
+SNapshot strategies in dbt - can use the timestamp or the check strategy
+Timestamp strategy makes use of the unique_key, and updated_at field to tell if a record has changed
+Therefore, the snapshot gets defined as:
+  - 
+{% snapshot scd_raw_listings %}
+	{{
+           config(
+		target_schema='dev', -- where to store snapshot data
+                unique_key='id',
+		strategy='timestamp', -- we are gonna use a timestamp and a unique key to track changes
+		updated_at='updated_at', -- because we are using a timestamp strategy, its imperative we pass an updated at field,
+		invalidate_hard_deletes=True -- this enables us to track deleted records as well. If a record disappears from the source table - dbt marks the record as invalid by setting dbt_valid_to to the current timestamp
+	)
+	}}
+
+	select * from {{ source('airbnb','listings')}}
+{% endsnapshot %}
+
+
+Another way of defining snapshots using the check strategy:
+ - 
+{% snapshot orders_snapshot %}
+	{{
+		config(
+			target_schema='snapshots',
+			unique_key='order_id',
+			strategy='check',
+			check_cols=['status','total_price'], -- here we keep track of the status and total price columns and track them for changes
+			invalidate_hard_deletes=True
+		)
+	}}
+	
+	SELECT * FROM {{ source('raw_data','orders') }}
+{% endsnapshot %}
+
+
+Execute the snapshot by running **dbt snapshot**
+
+
+TESTS:
+ - 2 types of tests: singular and generic
+ - Singular tests are SQL queries stored in the tests folder which are expected to return an empty resultset
+ - There's 4 built-in generic tests: 
+   - unique,
+   - not_null
+   - accepted_values
+   - Relationships
+ - You can define your own custom generic tests or import tests from dbt packages  
+
+
+Define your generic tests inside the schema.yml file inside the models folder, - remember inside the file,
+you specify the version, then define the models and tests
+
+run tests by running dbt test
+
+Generic tests - schema.yml inside the models folder
+Singular tests on the other hand - sql files inside the test folder - and the queries are supposed to return an empty resultset for the test to pass
+we can restrict only a few tests - 
+for example only the tests on a particular model
+   dbt test --select <model name>
+
+
+
+- creating generic tests in macros
+ - generic tests -write your macro in the macros folder - which basically takes your model and column_name as 
+arguments
+- unlike the singular test macro - this macro is enclosed in the 
+{%test <name>(model,column_name)%}
+	Then here, write your code - sql code that makes use of the model and column to execute the test
+	SELECT *
+	FROM {{ model }}
+	WHERE {{ column_name }} < 1
+{% endtest %}
+
+then call the test in the schema.yml file in the models folder
+then execute the tests by running dbt test --select <model name>
+
+
+Adding extra packages to dbt:
+ Website => hub.getdbt.com
+ start with dbt_utils
+ Inside project folder - create file packages.yml
+ Inside the file - include your code for the package you want to install - dbt_utils in this case
+
+To install it - then go to your terminal and run cmd -> dbt deps
+packages then get installed based on your packages definition
+
+
+One useful piece of functionality we pick up from the dbt utils package is sql generation such as the ability
+to generate surrogate keys from other columns in a table
+we use this piece of functionality to generate a primary key for a table without one
+
+
+We use dbt run --full-refresh  => since we have changed the schema on an incremental materialization model.
+
+To run only a particular model - just run 
+dbt run --full-refresh --select fct_reviews
+
+--full-refresh tag cuz we wanna rebuild the incremental model since we have changed the schema definition 
+--select fct_reviews cuz we want to rebuild only the fct_reviews model
+
+
+
+Documentation:
+	- You can build out your documentation by going to your schema.yml and adding a description to your models 
+and columns. 
+Then, to execute your documentation/ to compile your documentation => run **dbt docs generate**
+
+
+dbt writes an index.html file inside your target folder
+This contains your documentation
+You can start your light weight dbt documentation server to view your documentation or have a separate server
+for this. 
+
+Starting dbt doc server - dbt docs serve:
+
+
+Simple documentation - just add description to your schema and run dbt docs serve
+
+
+dbt docs generate to auto generate your documentation again
+then serve it with dbt docs serve
+
+
+More sophisticated documentation - inside your models folder => 
+ - create a doc.md file and write more indepth markdown documentation for your models
+   in macro format starting with 
+{% docs <key or name of this piece of documentation>%}
+	write your documentation here
+{% enddocs %}
+
+Then in the schema.yml file - under description -> Instead of having plain text, call your documentation using jinja templating
+e.g. description: '{{ doc("key in the doc.md file")}}'
+
+
+How about rewriting and redefining your general overview - which basically is the overview page that appears when 
+your launch your documentation
+
+Inside your models folder - create an overview.md file
+
+Overview goes with a special tag 
+
+{% docs __overview__ %}
+{% enddocs %}
+
+
+Overview.md => include your overview code here
+
+can have assets - images locally in your asssets folder - which is inside your project code. 
+- as long as in your project's yaml file - specify that the assets-path is your asset folder.
+
+
+
+Analyses, Hooks, and Exposures:
+ - Analyses - Many times you want to create an adhoc query - without building a model on top of it. 
+Without the model materialising in anyway - use analyses
+
+sql files in your analyses folder 
+ - queries in the analyses folder will not be materialised
+ - To execute them/run them against your warehouse, run dbt compile
+dbt compile goes through all the sql code in your project and compiles it into actual sql in the target folder
+
+Hooks - sql statements that are executed at predefined times
+     - they're included within your dbt project.yaml file
+
+
+
+DBT TESTING:
+ - TESTING YOUR DATA => One library especially good for data testing - great expectations
+   Data Sanity checks  - upstream data can change anytime - 
+Great expectations - provides a bunch of fxns to apply to your data 
+
+
+better data tests - dbt-expectations 
+- add it to your packages.yml in your project folder
+Run dbt deps
+
+Important to catch these errors before they spring out - using tests
+
+
+Looking for outliers in your data:
+ - 
+ - dbt expectations tests we've used so far: expect table row count to equal other table
+   - comparing transformed table with original table to ensure no additional rows have creeped through
+	Basic sanity check
+   - Other test we have -> expect column quantile values to be between -> to make sure most of our values are between certain values 
+
+- another great expectations test we can use if for cases where we don't want very high values for our data
+  - so we use values like max to be between => select the max value to be between a particular interval
+    we don't want anything more expensive than 5000
+
+- another test we want to execute is one that ensures that the column values are of a certain type:
+ - expect_column_values_to_be_of_type
+   
+ another dbt expectations test we can have is one that looks at the categorical variables - 
+  - counts them and ensures we have a certain fixed number of categories
+    
+can also prefix tests to run on particular sources
+dbt test --select source:airbnb.listings
+
+btw - dbt expectations source code can be found here:
+      - https://hub.getdbt.com/metaplane/dbt_expectations/latest/
+
+
+expect_column_values_to_match_regex:
+   - test from dbt expectations => written to ensure that column entries are strings that match a particular regex pattern. 
+
+
+DBT LOGGING:
+ - WRITE YOUR LOGGING SCRIPT IN A MACRO:
+   - then in terminal, run dbt run-operation -> command to execute a macro in itself
+
+
+
+to log values to your log file in your logs folder, ensure that in your macro, you have a command log("Message")
+{{ log("Message") }}
+to put your log message to the screen, use -> {{ log("Message",info=True) }}
+That command writes your log both to the screen, i.e. in your terminal and also in your log file.
+
+Finally, to disable logging completely, use these hash commands within your jinja templating
+{# log("Call your mom!", info=True) #}
+
+
+
+USING VARIABLES:
+ - 2 kinds of variables when working with your macros
+   - dbt variables
+   - jinja variables
+Jinja variables - simple variables from the jinja variables
+dbt variables - dbt specific variables 
+
+
+Jinja variables - defined using the set keyword. 
+
+Here's an example of a macro that defines a jinja variable, and then logs it to the screen
+Remember - to run your macros - don't need to call the entire dbt run -
+just call dbt run-operation <macro name>
+
+{% macro learn_variables() %}
+	{% set variable_name=<variable_value> %}
+	{{ log("Hello " ~variable_name, info=True) }}
+{% endmacro %}
+
+To concatenate strings in jinja use the tilde operator
+
+dbt run-operation <macro name>
+
+
+dbt variables:
+  - call them with the var keyword
+  - something like 
+		log("Hello dbt user " ~var("username"), info=True)
+var is a dbt variable
+
+
+passing a variable to a macro -> use vars when running the macro
+variables can be passed to a macro through either the project's yaml file 
+or in the command line 
+
+dbt run --vars "{'key':'value'}"
+
+How to define or set up default values for variables
+ - can pass default values within the code, project.yaml file and also within jinja project files to check for variable existence.
+Simplest way to avoid an error - add a value at the point of usage
+var("user_name","NO USERNAME IS SET")
+
+
+Instead of using the above method of defining defaults
+ - in the project yaml file, at the end, define a vars section and create your variable with its default value,
+   vars:
+	user_name: default_user_name_for_this_project
+
+command line variables take precendence, followed by variables in your yaml file, then defaults in your code, then if no variables are defined at all we have errors
+
+ - installations:
+   - install 
+
+
+
+Orchestrating dbt with dagster:
+  - need to orchestrate your project
+  - have your models materialized on a schedule
+  - 
+
+dagster has a way of cr
+
+Dagster Installation:
+ - Go one dir up from your dbtlearn folder
+ - 
+To install dagster - you basically need dagster and dagster webserver.
+
+Dagster Orchestrates dbt alongside other technologies, so, you can schedule dbt with spark, python, etc. in a single data pipeline.Dagster assets understand dbt at the level of individual dbt models
+
+For dagster-dbt => you need to install dagster-dbt
+
+- with a pip install dagster-dbt
+
+In this course - we're doing pip install dagster-dbt==0.22.0 and pip install dagster-webserver==1.6.0
+
+
+Starting Dagster on windows:
+Powershell:
+	cd dbt_dagster_project
+	$env:DAGSTER_DBT_PARSE_PROJECT_ON_LOAD=1
+	dagster dev
+On Windows - using cmd.exe
+
+cd dbt_dagster_project
+setx DAGSTER_DBT_PARSE_PROJECT_ON_LOAD 1
+dagster dev
+
+
+On Mac / Linux
+
+cd dbt_dagster_project
+DAGSTER_DBT_PARSE_PROJECT_ON_LOAD=1 dagster dev
+
+
+Create a dagster project:
+	Dagster has a command for creating a dagster project from an existing dbt project
+dagster-dbt project scaffold --project-name dbt_dagster_project --dbt-project-dir=dbtlearn
+
+
+running dagster dev in your project starts the dagster development server
+DAGSTER_DBT_PARSE_PROJECT_ON_LOAD=1 => everytime we start the server - dagster ought to check the folder and look for changes in the project.
+
+
+
+checking if the project works before running dagster - cd into your dbt project and run => dbt debug
+
+for all new projects clones - ensure to run dbt deps to install packages
+
+We need to ensure to start a schedule / schedule one before starting dagster.
+
+Starting the dagster server - cd into the dagster project and 
+                  
